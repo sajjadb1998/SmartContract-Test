@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+
+/// @custom:dev-run-script scripts/deploy_script.js
+
+contract Escrow {
+    address payable public buyer;
+    address payable public seller;
+    address payable public arbiter;
+    uint public depositAmount;
+    bool public sellerConfirmed;
+    uint public arbiterTotalFees; // State variable to keep track of fees
+    bool public fundsTransferred;
+    address public depositToken; // The token used for the deposit
+
+    // Token addresses on Polygon
+    address public constant Matic_ADDRESS = address(0);
+    address public constant USDT_ADDRESS = 0xc2132D05D31c914a87C6611C10748AEb04B58e8F;
+    address public constant WBTC_ADDRESS = 0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6;
+
+    event Deposit(address token, uint amount, address from);
+    event SellerConfirmed(address seller);
+    event TransactionFinalized(address token, uint payout, uint fee);
+    event Refund(address token, address buyer, uint amount);
+
+    constructor(address payable _seller, address payable _arbiter) {
+        require(_seller != _arbiter, "Seller and arbiter must be different");
+        require(msg.sender != _arbiter, "Buyer and arbiter must be different");
+        require(msg.sender != _seller, "Buyer and seller must be different");
+
+        buyer = payable(msg.sender);
+        seller = _seller;
+        arbiter = _arbiter;
+        arbiterTotalFees = 0;
+        fundsTransferred = false;
+        depositToken = Matic_ADDRESS; // Default to ETH
+    }
+
+    function deposit(address token, uint amount) external payable {
+        require(msg.sender == buyer, "Only buyer can deposit");
+        require(token == Matic_ADDRESS || token == USDT_ADDRESS || token == WBTC_ADDRESS, "Invalid token address");
+        require(amount > 0, "Amount must be greater than 0");
+
+        if (token == Matic_ADDRESS) {
+            require(msg.value == amount, "Incorrect ETH amount");
+        } else {
+            require(msg.value == 0, "Send ERC-20 tokens without ETH");
+            IERC20(token).transferFrom(msg.sender, address(this), amount);
+        }
+
+        depositAmount = amount;
+        depositToken = token;
+
+        emit Deposit(token, amount, msg.sender);
+    }
+
+    function confirmSeller() external {
+        require(msg.sender == seller, "Only seller can confirm");
+        sellerConfirmed = true;
+        emit SellerConfirmed(msg.sender);
+    }
+
+    function confirmReceived() external {
+        require(msg.sender == buyer, "Only buyer can confirm receipt");
+        require(sellerConfirmed, "Seller must confirm first");
+
+        uint fee = depositAmount * 2 / 100;
+        require(fee > 0, "Fee must be greater than 0");
+        uint payout = depositAmount - fee;
+
+        if (depositToken == Matic_ADDRESS) {
+            seller.transfer(payout); // Send payout in ETH
+            arbiter.transfer(fee); // Send fee in ETH
+        } else {
+            IERC20(depositToken).transfer(seller, payout); // Send payout in ERC-20 token
+            IERC20(depositToken).transfer(arbiter, fee); // Send fee in ERC-20 token
+        }
+
+        arbiterTotalFees += fee;
+        fundsTransferred = true;
+
+        emit TransactionFinalized(depositToken, payout, fee);
+
+        // Reset the state for potential next use
+        depositAmount = 0;
+        sellerConfirmed = false;
+        depositToken = Matic_ADDRESS;
+    }
+
+    function refundBuyer() external {
+        require(msg.sender == arbiter, "Only arbiter can refund buyer");
+        require(!sellerConfirmed, "Seller has already confirmed");
+
+        if (depositToken == Matic_ADDRESS) {
+            buyer.transfer(depositAmount); // Refund in ETH
+        } else {
+            IERC20(depositToken).transfer(buyer, depositAmount); // Refund in ERC-20 token
+        }
+
+        emit Refund(depositToken, buyer, depositAmount);
+
+        // Reset the state for potential next use
+        depositAmount = 0;
+        sellerConfirmed = false;
+        depositToken = Matic_ADDRESS;
+    }
+}
+/* 
+Step-by-Step Instructions for Using the Escrow Contract:
+Step 1: Compile the Contract
+- Open your Solidity IDE (such as Remix).
+- Paste the entire contract code into a new file.
+- Compile the contract using the Solidity compiler.
+Step 2: Deploy the Contract
+- Connect your MetaMask wallet to the IDE.
+- Make sure MetaMask is on the Goerli Test Network.
+- In the IDE, go to the 'Deploy' section.
+- Enter the seller and arbiter's addresses in the deployment fields.
+- Deploy the contract. MetaMask will pop up to confirm the transaction.
+Step 3: Interact with the Contract
+- Use the IDE's built-in functions or write a script to interact with the contract.
+- To deposit:
+  - Call 'deposit' with the correct token address and amount.
+  - For ERC-20 tokens, approve the contract to spend on your behalf first.
+- To confirm seller:
+  - The seller calls 'confirmSeller' to confirm participation.
+- To confirm receipt:
+  - The buyer calls 'confirmReceived' once they receive the item or service.
+- To refund the buyer:
+  - The arbiter calls 'refundBuyer' if the deal does not go through as planned.
+Step 4: Test the Contract
+- Use the IDE's JavaScript VM or Goerli Test Network for testing.
+- Make transactions with ETH and ERC-20 tokens.
+- Check the contract's state changes and event logs to verify correct operation.
+Step 5: Interacting with the Contract through a Web Interface
+- Use a web3 library, like Web3.js or Ethers.js, in your web interface.
+- Write JavaScript functions to handle button clicks for contract operations.
+- Interact with MetaMask from your web interface to send transactions.
+Remember:
+- Always test in a safe environment first before deploying to the Ethereum Main Network.
+- Keep your private keys and sensitive information secure.
+- Double-check addresses and amounts before confirming transactions.
+*/
